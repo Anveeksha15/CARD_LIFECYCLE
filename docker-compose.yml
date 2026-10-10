@@ -13,8 +13,22 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - ACQUIRER_URL=http://acquirer:8001
     depends_on:
       - redis
+      - acquirer
+
+  acquirer:
+    build: .
+    command: ["python", "-m", "uvicorn", "services.acquirer.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - PROCESSOR_URL=http://processor:8002
+    depends_on:
+      - processor
 
   issuer:
     build: .
