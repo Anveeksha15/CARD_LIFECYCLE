@@ -38,7 +38,12 @@ def upsert_account(card_number: str, status: str, balance_cents: int) -> None:
 
 
 def record_authorization(request_id: str, card_number: str, amount_cents: int) -> None:
+    """Idempotent: a retried request carries the same request_id, so a second
+    call for one already recorded is a no-op rather than a primary-key clash.
+    """
     with Session(_engine) as session:
+        if session.get(Authorization, request_id) is not None:
+            return
         session.add(
             Authorization(
                 request_id=request_id,

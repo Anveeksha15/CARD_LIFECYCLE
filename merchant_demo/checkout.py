@@ -14,7 +14,7 @@ def buy(
     *,
     idempotency_key: str | None = None,
     simulate_lost_response: bool = False,
-) -> None:
+) -> dict:
     token_resp = httpx.post(f"{GATEWAY_URL}/v1/tokens", json={"card_number": card_number})
     token_resp.raise_for_status()
     token = token_resp.json()["token"]
@@ -33,7 +33,9 @@ def buy(
         timeout=10.0,
     )
     intent_resp.raise_for_status()
-    print(intent_resp.json())
+    result = intent_resp.json()
+    print(result)
+    return result
 
 
 if __name__ == "__main__":

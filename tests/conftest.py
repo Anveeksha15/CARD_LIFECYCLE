@@ -1,5 +1,6 @@
 import pytest
 
+from scripts.seed_issuer import main as seed_issuer
 from services.gateway.db import init_db as init_gateway_db
 from services.issuer.accounts import init_db as init_issuer_db
 
@@ -8,3 +9,4 @@ from services.issuer.accounts import init_db as init_issuer_db
 def _init_dbs():
     init_gateway_db()
     init_issuer_db()
+    seed_issuer()

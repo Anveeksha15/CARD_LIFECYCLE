@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -60,6 +61,8 @@ class PaymentIntentResponse(BaseModel):
     amount_cents: int
     status: str
     decline_reason: DeclineReason | None = None
+    settled: bool = False
+    created_at: datetime
 
 
 class ReversalRequest(BaseModel):

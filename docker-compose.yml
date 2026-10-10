@@ -71,3 +71,13 @@ services:
       - NETWORK_URL=http://network:8003
     depends_on:
       - network
+
+  settlement:
+    build: .
+    command: ["python", "-m", "services.settlement.worker"]
+    env_file:
+      - .env
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+    depends_on:
+      - gateway

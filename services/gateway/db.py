@@ -17,6 +17,7 @@ class PaymentIntent(SQLModel, table=True):
     status: str
     decline_reason: str | None = None
     request_id: str | None = None
+    settled: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

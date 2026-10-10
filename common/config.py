@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     network_port: int = 8003
     issuer_port: int = 8004
 
+    gateway_url: str = "http://localhost:8000"
     acquirer_url: str = "http://localhost:8001"
     processor_url: str = "http://localhost:8002"
     network_url: str = "http://localhost:8003"
@@ -26,6 +27,9 @@ class Settings(BaseSettings):
     retry_backoff_base_seconds: float = 0.2
 
     simulate_lost_response_delay_seconds: float = 3.0
+
+    settlement_poll_interval_seconds: float = 1.0
+    settlement_fee_bps: int = 290  # 2.9%, percentage-only - no flat per-transaction fee
 
 
 settings = Settings()

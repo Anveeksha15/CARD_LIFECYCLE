@@ -1,6 +1,8 @@
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from sqlmodel import select
 
 from common.config import settings
 from common.http import UpstreamError, post_with_retry
@@ -22,6 +24,17 @@ from services.gateway.webhooks import send_webhook
 router = APIRouter()
 
 
+def _to_response(intent: PaymentIntent) -> PaymentIntentResponse:
+    return PaymentIntentResponse(
+        id=intent.id,
+        amount_cents=intent.amount_cents,
+        status=intent.status,
+        decline_reason=intent.decline_reason,
+        settled=intent.settled,
+        created_at=intent.created_at,
+    )
+
+
 @router.post("/v1/tokens", response_model=TokenizeResponse)
 def create_token(req: TokenizeRequest) -> TokenizeResponse:
     try:
@@ -29,6 +42,30 @@ def create_token(req: TokenizeRequest) -> TokenizeResponse:
     except InvalidCardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TokenizeResponse(token=token)
+
+
+@router.get("/v1/payment_intents", response_model=list[PaymentIntentResponse])
+def list_payment_intents(unsettled: bool = False) -> list[PaymentIntentResponse]:
+    with get_session() as session:
+        intents = session.exec(
+            select(PaymentIntent).where(PaymentIntent.status == "succeeded")
+        ).all()
+    if unsettled:
+        intents = [i for i in intents if not i.settled]
+    return [_to_response(i) for i in intents]
+
+
+@router.post("/v1/payment_intents/{intent_id}/settle", response_model=PaymentIntentResponse)
+def settle_payment_intent(intent_id: str) -> PaymentIntentResponse:
+    with get_session() as session:
+        intent = session.get(PaymentIntent, intent_id)
+        if intent is None:
+            raise HTTPException(status_code=404, detail="payment_intent not found")
+        intent.settled = True
+        session.add(intent)
+        session.commit()
+        session.refresh(intent)
+        return _to_response(intent)
 
 
 @router.post("/v1/payment_intents", response_model=PaymentIntentResponse)
@@ -59,6 +96,7 @@ def create_payment_intent(
 
     intent_id = f"pi_{uuid.uuid4().hex[:16]}"
     request_id = uuid.uuid4().hex
+    created_at = datetime.now(UTC)
 
     payload = AcquirerAuthorizeRequest(
         api_key=api_key,
@@ -96,6 +134,7 @@ def create_payment_intent(
                 status=status,
                 decline_reason=result.reason,
                 request_id=request_id,
+                created_at=created_at,
             )
         )
         session.commit()
@@ -105,6 +144,7 @@ def create_payment_intent(
         amount_cents=req.amount_cents,
         status=status,
         decline_reason=result.reason,
+        created_at=created_at,
     )
 
     if idem_redis_key:
