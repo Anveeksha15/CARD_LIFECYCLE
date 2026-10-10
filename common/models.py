@@ -15,11 +15,17 @@ class DeclineReason(StrEnum):
     CARD_NOT_FOUND = "card_not_found"
     UNSUPPORTED_NETWORK = "unsupported_network"
     INVALID_MERCHANT = "invalid_merchant"
+    UPSTREAM_TIMEOUT = "upstream_timeout"
 
 
 class AuthorizeRequest(BaseModel):
     card_number: str
     amount_cents: int = Field(gt=0)
+    request_id: str
+    # Demo-only chaos flag: tells the issuer to approve, persist the
+    # authorization, then sleep past the caller's timeout so the response
+    # never arrives - simulating the "approved but response lost" failure.
+    simulate_lost_response: bool = False
 
 
 class NetworkAuthorizeRequest(AuthorizeRequest):
@@ -54,3 +60,11 @@ class PaymentIntentResponse(BaseModel):
     amount_cents: int
     status: str
     decline_reason: DeclineReason | None = None
+
+
+class ReversalRequest(BaseModel):
+    request_id: str
+
+
+class ReversalResponse(BaseModel):
+    reversed: bool

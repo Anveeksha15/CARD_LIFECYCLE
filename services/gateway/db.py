@@ -16,6 +16,7 @@ class PaymentIntent(SQLModel, table=True):
     token: str
     status: str
     decline_reason: str | None = None
+    request_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

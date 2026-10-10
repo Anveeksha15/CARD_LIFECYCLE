@@ -1,12 +1,14 @@
-import httpx
 from fastapi import FastAPI, HTTPException
 
 from common.config import settings
+from common.http import UpstreamError, post_with_retry
 from common.models import (
     AcquirerAuthorizeRequest,
     AuthorizeRequest,
     AuthorizeResponse,
     DeclineReason,
+    ReversalRequest,
+    ReversalResponse,
 )
 
 app = FastAPI(title="acquirer")
@@ -32,13 +34,27 @@ def authorize(req: AcquirerAuthorizeRequest) -> AuthorizeResponse:
     if not is_valid_merchant(req.api_key):
         return AuthorizeResponse(approved=False, reason=DeclineReason.INVALID_MERCHANT)
 
-    payload = AuthorizeRequest(card_number=req.card_number, amount_cents=req.amount_cents)
+    payload = AuthorizeRequest(
+        card_number=req.card_number,
+        amount_cents=req.amount_cents,
+        request_id=req.request_id,
+        simulate_lost_response=req.simulate_lost_response,
+    )
     try:
-        resp = httpx.post(
-            f"{settings.processor_url}/v1/authorize", json=payload.model_dump(), timeout=5.0
-        )
-        resp.raise_for_status()
-    except httpx.HTTPError as exc:
+        resp = post_with_retry(f"{settings.processor_url}/v1/authorize", payload.model_dump())
+    except UpstreamError as exc:
         raise HTTPException(status_code=503, detail="processor unreachable") from exc
 
     return AuthorizeResponse.model_validate(resp.json())
+
+
+@app.post("/v1/reversals", response_model=ReversalResponse)
+def reverse(req: ReversalRequest) -> ReversalResponse:
+    try:
+        resp = post_with_retry(
+            f"{settings.processor_url}/v1/reversals", req.model_dump(), max_attempts=1
+        )
+    except UpstreamError as exc:
+        raise HTTPException(status_code=503, detail="processor unreachable") from exc
+
+    return ReversalResponse.model_validate(resp.json())

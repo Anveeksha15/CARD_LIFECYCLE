@@ -19,5 +19,13 @@ class Settings(BaseSettings):
     network_url: str = "http://localhost:8003"
     issuer_url: str = "http://localhost:8004"
 
+    merchant_webhook_url: str = "http://localhost:9000/webhook"
+
+    request_timeout_seconds: float = 1.0
+    max_retry_attempts: int = 2
+    retry_backoff_base_seconds: float = 0.2
+
+    simulate_lost_response_delay_seconds: float = 3.0
+
 
 settings = Settings()

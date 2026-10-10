@@ -14,9 +14,19 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - ACQUIRER_URL=http://acquirer:8001
+      - MERCHANT_WEBHOOK_URL=http://merchant-demo:9000/webhook
     depends_on:
       - redis
       - acquirer
+      - merchant-demo
+
+  merchant-demo:
+    build: .
+    command: ["python", "-m", "uvicorn", "merchant_demo.webhook_receiver:app", "--host", "0.0.0.0", "--port", "9000"]
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
 
   acquirer:
     build: .
