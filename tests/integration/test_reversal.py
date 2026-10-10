@@ -8,11 +8,9 @@ AUTH_HEADERS = {"Authorization": "Bearer sk_test_demo_merchant"}
 
 
 def test_lost_response_triggers_reversal(gateway_client, monkeypatch):
-    # Shrink the budget so the chaos path resolves in well under a second.
-    monkeypatch.setattr(settings, "request_timeout_seconds", 0.1)
-    monkeypatch.setattr(settings, "max_retry_attempts", 2)
-    monkeypatch.setattr(settings, "retry_backoff_base_seconds", 0.01)
-    monkeypatch.setattr(settings, "simulate_lost_response_delay_seconds", 0.5)
+    # The issuer still runs its real simulate_lost_response sleep (see
+    # tests/integration/conftest.py) - shrink it so the test stays fast.
+    monkeypatch.setattr(settings, "simulate_lost_response_delay_seconds", 0.05)
 
     token_resp = gateway_client.post("/v1/tokens", json={"card_number": "4242424242424242"})
     token = token_resp.json()["token"]

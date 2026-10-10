@@ -1,14 +1,14 @@
 """Runs the real service chain in-process by routing common.http.post_with_retry's
 call sites to each service's own FastAPI TestClient instead of real network calls.
-A background thread + future.result(timeout=...) is used so that a slow handler
-(the issuer's simulate_lost_response sleep) genuinely times out here the same way
-a real httpx call would, including abandoning the still-running handler - this is
-what makes the reversal scenario reproducible without Docker.
-"""
 
-import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
+The "issuer approves but the response is lost" scenario is simulated
+deterministically rather than via real timeouts: the network -> issuer hop makes
+the real call (so the issuer genuinely persists the approval), then treats it as
+lost whenever the request carries simulate_lost_response. This avoids needing
+real wall-clock timeouts or background threads in the test suite, which earlier
+caused flaky, timing-dependent failures (nested hops sharing one thread pool
+could starve each other and spuriously time out ordinary, non-chaos requests).
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,8 +21,6 @@ import services.processor.main as processor_main
 from common.config import settings
 from common.http import UpstreamError
 from services.gateway.main import app as gateway_app
-
-_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 
 @pytest.fixture
@@ -43,28 +41,26 @@ def service_clients():
 @pytest.fixture(autouse=True)
 def route_post_with_retry(monkeypatch, service_clients):
     def fake_post_with_retry(url, json, *, timeout=None, max_attempts=None, backoff_base=None):
-        timeout = settings.request_timeout_seconds if timeout is None else timeout
         max_attempts = settings.max_retry_attempts if max_attempts is None else max_attempts
-        backoff_base = settings.retry_backoff_base_seconds if backoff_base is None else backoff_base
 
         base_url, client = next(
             (b, c) for b, c in service_clients.items() if url.startswith(b)
         )
         path = url[len(base_url) :]
 
-        last_exc: Exception | None = None
-        for attempt in range(1, max_attempts + 1):
-            future = _EXECUTOR.submit(client.post, path, json=json)
-            try:
-                resp = future.result(timeout=timeout)
-                if resp.status_code < 500:
-                    return resp
-                last_exc = Exception(f"status {resp.status_code}")
-            except FutureTimeoutError as exc:
-                last_exc = exc
+        if base_url == settings.issuer_url and json.get("simulate_lost_response"):
+            # Make the real call once - the issuer genuinely persists the
+            # approval - then treat the response as lost. Deterministic, no
+            # real network timeout needed to reproduce the scenario.
+            client.post(path, json=json)
+            raise UpstreamError(f"simulated lost response from {url}")
 
-            if attempt < max_attempts:
-                time.sleep(backoff_base * (2 ** (attempt - 1)))
+        last_exc: Exception | None = None
+        for _ in range(max_attempts):
+            resp = client.post(path, json=json)
+            if resp.status_code < 500:
+                return resp
+            last_exc = Exception(f"status {resp.status_code}")
 
         raise UpstreamError(f"failed to reach {url} after {max_attempts} attempts") from last_exc
 
