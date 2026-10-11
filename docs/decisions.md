@@ -156,10 +156,12 @@ fraud decision** (fail open).
   reason: the fraud service never sees secrets or card numbers.
 
 Measured on the Docker stack (`python -m scripts.fraud_latency`, `ml/results/latency.md`):
-`/v1/score` is ~6 ms p50 / ~8 ms p95 on its own, and turning the check on adds ~17 ms p50
-to a gateway payment intent. That's more than the score call alone because
-`post_with_retry` opens a new connection per call; a pooled client would be the first
-optimization.
+`/v1/score` is ~5 ms p50 / ~6 ms p95 on its own. On Day 5, turning the check on added
+~17 ms p50 to a gateway payment intent - much more than the score call itself, because
+`post_with_retry` opened a new TCP connection for every call. Day 6 switched it to one
+pooled `httpx.Client` per process: the fraud check now adds ~8 ms p50 / ~8 ms p95, and
+since every inter-service hop uses the same helper, the whole payment got faster too
+(p50 with the check off went from 43 ms to 20 ms).
 
 **Two things the demo surfaced:**
 - **BIN spillover.** After a burst on BIN 424242, a clean customer on that BIN scored 0.82

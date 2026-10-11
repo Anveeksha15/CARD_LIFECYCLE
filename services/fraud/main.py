@@ -2,7 +2,7 @@ import time
 from contextlib import asynccontextmanager
 
 import redis
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from common.config import settings
 from common.models import (
@@ -26,6 +26,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="fraud", lifespan=lifespan)
 
 
+def _redis_unavailable(exc: redis.RedisError) -> HTTPException:
+    # A clear 503 rather than a 500 traceback; the gateway fails open on either.
+    return HTTPException(status_code=503, detail=f"feature store unavailable: {exc}")
+
+
 def decide(risk: float, block_threshold: float) -> FraudDecision:
     if risk >= block_threshold:
         return FraudDecision.BLOCK
@@ -45,7 +50,10 @@ def score(req: FraudScoreRequest, request: Request) -> FraudScoreResponse:
     model: FraudModel = request.app.state.model
     tx = Tx(req.event_id, req.card_fingerprint, req.bin, req.ip, req.email)
     # Records this attempt before scoring it, so a blocked attempt still counts.
-    features = observe(_redis, tx, now=time.time())
+    try:
+        features = observe(_redis, tx, now=time.time())
+    except redis.RedisError as exc:
+        raise _redis_unavailable(exc) from exc
     risk = model.predict(features, req.amount_cents)
     return FraudScoreResponse(
         risk=risk, decision=decide(risk, model.threshold), model=model.name, features=features
@@ -55,5 +63,8 @@ def score(req: FraudScoreRequest, request: Request) -> FraudScoreResponse:
 @app.post("/v1/outcome")
 def outcome(req: FraudOutcomeRequest) -> dict:
     tx = Tx(req.event_id, req.card_fingerprint, req.bin, req.ip, req.email)
-    record_outcome(_redis, tx, now=time.time(), declined=req.declined)
+    try:
+        record_outcome(_redis, tx, now=time.time(), declined=req.declined)
+    except redis.RedisError as exc:
+        raise _redis_unavailable(exc) from exc
     return {"recorded": True}

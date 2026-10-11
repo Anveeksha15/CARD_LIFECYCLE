@@ -100,7 +100,7 @@ def main() -> None:
     print(table)
     RESULTS.parent.mkdir(parents=True, exist_ok=True)
     with RESULTS.open("a") as f:
-        f.write(f"\n<!-- run {time.strftime('%Y-%m-%d %H:%M')}, fraud check {label} -->\n")
+        f.write(f"\n_run {time.strftime('%Y-%m-%d %H:%M')}, fraud check {label}_\n\n")
         f.write(table + "\n")
     print(f"appended to {RESULTS}")
 

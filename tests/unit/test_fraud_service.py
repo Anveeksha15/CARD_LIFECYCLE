@@ -1,5 +1,6 @@
 import fakeredis
 import pytest
+import redis
 from fastapi.testclient import TestClient
 
 import services.fraud.main as fraud_main
@@ -80,3 +81,22 @@ def test_decision_tiers(client, monkeypatch, risk, expected):
 def test_missing_artifact_fails_fast(tmp_path):
     with pytest.raises(FileNotFoundError, match="ml.train"):
         FraudModel.load(tmp_path / "nope")
+
+
+class _DownRedis(fakeredis.FakeRedis):
+    def pipeline(self, *args, **kwargs):
+        raise redis.ConnectionError("connection refused")
+
+
+def test_redis_down_returns_503(client, monkeypatch):
+    monkeypatch.setattr(fraud_main, "_redis", _DownRedis(decode_responses=True))
+    resp = client.post("/v1/score", json=payment(1))
+    assert resp.status_code == 503
+    assert "feature store unavailable" in resp.json()["detail"]
+    outcome = client.post("/v1/outcome", json=outcome_for(payment(1), declined=True))
+    assert outcome.status_code == 503
+
+
+@pytest.mark.parametrize("bad", [{"bin": "42424"}, {"amount_cents": 0}, {"ip": None}])
+def test_invalid_request_is_rejected(client, bad):
+    assert client.post("/v1/score", json=payment(1) | bad).status_code == 422

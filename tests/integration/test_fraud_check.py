@@ -1,6 +1,8 @@
 import random
+import uuid
 
 import fakeredis
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,6 +12,7 @@ import services.gateway.routes as gateway_routes
 from common.config import settings
 from common.http import UpstreamError
 from common.luhn import complete_luhn
+from services.fraud.model import FraudModel
 from services.gateway.db import FraudCheck, get_session
 
 AUTH_HEADERS = {"Authorization": "Bearer sk_test_demo_merchant"}
@@ -41,12 +44,40 @@ def acquirer_calls(monkeypatch):
     return calls
 
 
-def _pay(client, card_number, amount_cents, **customer):
+@pytest.fixture
+def score_calls(monkeypatch):
+    calls = []
+    real = gateway_fraud.score
+
+    def spy(req):
+        calls.append(req)
+        return real(req)
+
+    monkeypatch.setattr(gateway_fraud, "score", spy)
+    return calls
+
+
+@pytest.fixture
+def outcomes(monkeypatch):
+    reported = []
+    monkeypatch.setattr(
+        gateway_fraud, "report_outcome", lambda req, declined: reported.append(declined)
+    )
+    return reported
+
+
+def _stub_fraud_risk(risk, threshold=0.9):
+    stub = FraudModel(model=None, meta={"model": "stub", "threshold": threshold, "features": []})
+    stub.predict = lambda features, amount: risk
+    fraud_main.app.state.model = stub
+
+
+def _pay(client, card_number, amount_cents, headers=None, **customer):
     token = client.post("/v1/tokens", json={"card_number": card_number}).json()["token"]
     resp = client.post(
         "/v1/payment_intents",
         json={"amount_cents": amount_cents, "token": token, **customer},
-        headers=AUTH_HEADERS,
+        headers={**AUTH_HEADERS, **(headers or {})},
     )
     assert resp.status_code == 200
     return resp.json()
@@ -111,6 +142,66 @@ def test_fraud_service_down_fails_open(gateway_client, fraud_on, monkeypatch):
 
     monkeypatch.setattr(gateway_fraud, "post_with_retry", fraud_down)
     body = _pay(gateway_client, "4242424242424242", 1500, customer_ip="198.51.100.8")
+    assert body["status"] == "succeeded"
+    assert body["fraud_decision"] is None
+    assert _fraud_row(body["id"]) is None
+
+
+def test_idempotent_replay_is_scored_once(gateway_client, fraud_on, score_calls):
+    key = {"Idempotency-Key": f"fraud-replay-{uuid.uuid4().hex[:8]}"}
+    first = _pay(gateway_client, "4242424242424242", 1500, headers=key)
+    second = _pay(gateway_client, "4242424242424242", 1500, headers=key)
+    assert first["id"] == second["id"]
+    assert second["fraud_decision"] == "allow"
+    # A replay must not count as a second attempt in the fraud windows.
+    assert len(score_calls) == 1
+
+
+def test_outcome_reported_for_issuer_answers(gateway_client, fraud_on, outcomes):
+    _pay(gateway_client, "4242424242424242", 1500, customer_ip="198.51.100.20")
+    _pay(gateway_client, "4000000000009995", 500, customer_ip="198.51.100.21")
+    assert outcomes == [False, True]
+
+
+def test_no_outcome_for_blocked_payment(gateway_client, fraud_on, outcomes):
+    _stub_fraud_risk(0.99)
+    body = _pay(gateway_client, "4242424242424242", 1500)
+    assert body["decline_reason"] == "fraud_suspected"
+    assert outcomes == []
+
+
+def test_no_outcome_when_issuer_answer_is_lost(gateway_client, fraud_on, outcomes, monkeypatch):
+    monkeypatch.setattr(settings, "simulate_lost_response_delay_seconds", 0.05)
+    body = _pay(
+        gateway_client, "4242424242424242", 1000, headers={"X-Simulate-Lost-Response": "true"}
+    )
+    assert body["decline_reason"] == "upstream_timeout"
+    assert outcomes == []
+
+
+def test_review_still_reaches_the_acquirer(gateway_client, fraud_on, acquirer_calls):
+    _stub_fraud_risk(0.6)
+    body = _pay(gateway_client, "4242424242424242", 1500)
+    assert body["fraud_decision"] == "review"
+    assert body["status"] == "succeeded"
+    assert len(acquirer_calls) == 1
+
+
+def test_client_host_used_when_merchant_sends_no_ip(gateway_client, fraud_on, score_calls):
+    _pay(gateway_client, "4242424242424242", 1500)
+    assert score_calls[0].ip == "testclient"  # TestClient's request.client.host
+
+
+def test_malformed_fraud_response_fails_open(gateway_client, fraud_on, monkeypatch):
+    routed = gateway_fraud.post_with_retry
+
+    def garbage(url, json, **kwargs):
+        if url.startswith(settings.fraud_url):
+            return httpx.Response(200, text="<html>oops</html>")
+        return routed(url, json, **kwargs)
+
+    monkeypatch.setattr(gateway_fraud, "post_with_retry", garbage)
+    body = _pay(gateway_client, "4242424242424242", 1500)
     assert body["status"] == "succeeded"
     assert body["fraud_decision"] is None
     assert _fraud_row(body["id"]) is None
