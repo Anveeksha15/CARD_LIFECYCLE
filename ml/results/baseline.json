@@ -1,0 +1,33 @@
+{
+  "all": {
+    "precision": 0.8685121107266436,
+    "recall": 0.7153035052721574,
+    "f1": 0.7844975777465231,
+    "fpr": 0.0039754775803988035,
+    "campaign_recall": 0.8363636363636363,
+    "tp": 2510,
+    "fp": 380,
+    "fn": 999,
+    "tn": 95206
+  },
+  "test": {
+    "precision": 0.5581395348837209,
+    "recall": 0.5680473372781065,
+    "f1": 0.5630498533724341,
+    "fpr": 0.012883539582980165,
+    "campaign_recall": 0.7142857142857143,
+    "tp": 480,
+    "fp": 380,
+    "fn": 365,
+    "tn": 29115
+  },
+  "flag_rate_by_scenario": {
+    "attack_burst": 0.9223,
+    "attack_rotating_ip": 0.0061,
+    "attack_slow": 0.0793,
+    "flash_sale": 0.3108,
+    "normal": 0.0,
+    "normal_retry": 0.0025,
+    "normal_shared_ip": 0.0
+  }
+}
