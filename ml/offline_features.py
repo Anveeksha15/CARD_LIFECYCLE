@@ -3,27 +3,21 @@
 Each event's features use only what a real-time scorer would know at that moment: all
 earlier events, plus the current event's own identifiers (ip, email, card, bin). The
 current event's *outcome* is never used - at scoring time the payment hasn't been
-authorized yet. The Redis version (services/fraud/features.py, Day 2) must follow the
-same rules, including the window boundary: an event counts if `ts > now - window`.
+authorized yet. The Redis version (services/fraud/features.py) follows the same rules,
+including the window boundary: an event counts if `ts > now - window`.
 """
 
 from collections import defaultdict, deque
 
 import pandas as pd
 
-IP_SHORT_WINDOW = 60
-IP_LONG_WINDOW = 300
-EMAIL_WINDOW = 60
-BIN_WINDOW = 60
-
-FEATURE_NAMES = [
-    "attempts_per_ip_60s",
-    "failed_per_ip_60s",
-    "distinct_cards_per_ip_5m",
-    "decline_rate_ip_5m",
-    "attempts_per_email_60s",
-    "attempts_per_bin_60s",
-]
+from services.fraud.features import (
+    BIN_WINDOW,
+    EMAIL_WINDOW,
+    FEATURE_NAMES,
+    IP_LONG_WINDOW,
+    IP_SHORT_WINDOW,
+)
 
 
 def _evict(window: deque, now: float, seconds: float) -> None:

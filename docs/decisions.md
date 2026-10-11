@@ -80,6 +80,37 @@ the bind mounts entirely: the image's own copy of the source is authoritative, a
 rebuild (`docker compose up --build`) is required to pick up code changes. Slower
 inner loop, but no more silent host/container path mismatches.
 
+### Fraud features: one definition, two paths, and a parity test between them
+The fraud model is trained on features computed offline from a CSV
+(`ml/offline_features.py`) but served from features computed live in Redis
+(`services/fraud/features.py`). If the two drift apart - a window off by one, a
+boundary that's inclusive on one side and exclusive on the other - the model silently
+scores inputs it never saw in training (training/serving skew). Three things guard
+against that:
+
+- **One definition.** Feature names and window sizes live only in
+  `services/fraud/features.py`; the offline code imports them.
+- **A parity test.** `tests/unit/test_feature_parity.py` replays generated traffic
+  through Redis (fakeredis) and requires the same numbers as the offline path on every
+  row; `python -m ml.check_parity` does the same at larger scale against real Redis.
+- **Boundary unit tests.** Random millisecond timestamps almost never land exactly on a
+  window edge, so the parity test alone missed a deliberately planted inclusive/exclusive
+  bug. `test_short_window_boundary_is_exclusive` catches it.
+
+**The current payment's outcome is never a feature.** A real-time scorer runs before
+the issuer has decided, so it can't know whether this payment will be declined. Using it
+offline would leak the answer into training. So each payment touches Redis twice:
+`observe()` at score time records the attempt and returns features, then
+`record_outcome()` after authorization records a decline. A side effect: a payment the
+fraud check blocks still counts as an attempt, so an attacker can't reset their own
+counters by getting blocked.
+
+**Sorted sets, one round trip.** Each window is a sorted set scored by timestamp; trim
+with `ZREMRANGEBYSCORE` (inclusive, which drops an event exactly `window` seconds old),
+count with `ZCOUNT` using an exclusive `(` lower bound. Distinct cards per IP is a sorted
+set keyed by card with its last-seen time as the score. All trims, adds, counts and
+TTLs go in one `MULTI` pipeline - one network round trip per score, no Lua needed.
+
 ### Other excluded scope
 Encryption at rest, authorization/capture as separate steps, chargebacks, and
 multi-currency are all left out - see the README's "What's excluded" section. None of
