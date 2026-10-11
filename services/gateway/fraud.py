@@ -28,20 +28,43 @@ def fingerprint(card_number: str) -> str:
 
 
 def build_request(
-    card_number: str, amount_cents: int, ip: str, email: str | None, intent_id: str, api_key: str
+    card_number: str,
+    amount_cents: int,
+    ip: str | None,
+    email: str | None,
+    intent_id: str,
+    api_key: str,
 ) -> FraudScoreRequest:
     return FraudScoreRequest(
         event_id=intent_id,
         card_fingerprint=fingerprint(card_number),
         bin=card_number[:6],
-        ip=ip,
-        # Without an email, give the payment a key of its own - a shared placeholder
-        # would make every email-less payment look like one customer's burst.
+        # Missing shopper details get a key of their own. A shared placeholder - or the
+        # merchant server's address, which is what request.client.host would be - would
+        # make all of a merchant's shoppers look like one actor's burst.
+        ip=ip or f"none:{intent_id}",
         email=email or f"none:{intent_id}",
         amount_cents=amount_cents,
         # The fraud service never sees the merchant's secret key.
         merchant_id="m_" + hashlib.sha256(api_key.encode()).hexdigest()[:12],
     )
+
+
+def check(
+    card_number: str,
+    amount_cents: int,
+    ip: str | None,
+    email: str | None,
+    intent_id: str,
+    api_key: str,
+) -> tuple[FraudScoreRequest | None, FraudScoreResponse | None]:
+    """Build the request and score it. Anything that goes wrong fails open as (req, None)."""
+    try:
+        req = build_request(card_number, amount_cents, ip, email, intent_id, api_key)
+    except ValueError as exc:  # e.g. a card too short to have a 6-digit BIN
+        log.warning("fraud check failed open for %s: %s", intent_id, exc)
+        return None, None
+    return req, score(req)
 
 
 def score(req: FraudScoreRequest) -> FraudScoreResponse | None:
@@ -61,7 +84,8 @@ def score(req: FraudScoreRequest) -> FraudScoreResponse | None:
 
 
 def report_outcome(req: FraudScoreRequest, declined: bool) -> None:
-    """Tell the fraud service how the issuer answered. Runs as a background task."""
+    """Tell the fraud service how the payment ended. Runs as a background task, so it gets
+    the normal timeout and retries rather than the scoring budget."""
     body = FraudOutcomeRequest(
         event_id=req.event_id,
         card_fingerprint=req.card_fingerprint,
@@ -74,8 +98,6 @@ def report_outcome(req: FraudScoreRequest, declined: bool) -> None:
         post_with_retry(
             f"{settings.fraud_url}/v1/outcome",
             body.model_dump(),
-            timeout=settings.fraud_timeout_seconds,
-            max_attempts=1,
         )
     except _FAIL_OPEN_ERRORS as exc:
         log.warning("fraud outcome not recorded for %s: %s", req.event_id, exc)

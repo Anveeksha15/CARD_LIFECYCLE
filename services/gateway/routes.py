@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from sqlmodel import select
 
 from common.config import settings
@@ -26,7 +26,7 @@ from services.gateway.webhooks import send_webhook
 router = APIRouter()
 
 
-def _to_response(intent: PaymentIntent) -> PaymentIntentResponse:
+def _to_response(intent: PaymentIntent, fraud_decision: str | None = None) -> PaymentIntentResponse:
     return PaymentIntentResponse(
         id=intent.id,
         amount_cents=intent.amount_cents,
@@ -34,7 +34,15 @@ def _to_response(intent: PaymentIntent) -> PaymentIntentResponse:
         decline_reason=intent.decline_reason,
         settled=intent.settled,
         created_at=intent.created_at,
+        fraud_decision=fraud_decision,
     )
+
+
+def _fraud_decisions(session, intent_ids: list[str]) -> dict[str, str]:
+    if not intent_ids:
+        return {}
+    rows = session.exec(select(FraudCheck).where(FraudCheck.intent_id.in_(intent_ids))).all()
+    return {row.intent_id: row.decision for row in rows}
 
 
 @router.post("/v1/tokens", response_model=TokenizeResponse)
@@ -52,9 +60,10 @@ def list_payment_intents(unsettled: bool = False) -> list[PaymentIntentResponse]
         intents = session.exec(
             select(PaymentIntent).where(PaymentIntent.status == "succeeded")
         ).all()
-    if unsettled:
-        intents = [i for i in intents if not i.settled]
-    return [_to_response(i) for i in intents]
+        if unsettled:
+            intents = [i for i in intents if not i.settled]
+        decisions = _fraud_decisions(session, [i.id for i in intents])
+    return [_to_response(i, decisions.get(i.id)) for i in intents]
 
 
 @router.post("/v1/payment_intents/{intent_id}/settle", response_model=PaymentIntentResponse)
@@ -67,13 +76,12 @@ def settle_payment_intent(intent_id: str) -> PaymentIntentResponse:
         session.add(intent)
         session.commit()
         session.refresh(intent)
-        return _to_response(intent)
+        return _to_response(intent, _fraud_decisions(session, [intent_id]).get(intent_id))
 
 
 @router.post("/v1/payment_intents", response_model=PaymentIntentResponse)
 def create_payment_intent(
     req: PaymentIntentCreateRequest,
-    request: Request,
     background_tasks: BackgroundTasks,
     authorization: str = Header(..., alias="Authorization"),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
@@ -103,15 +111,17 @@ def create_payment_intent(
 
     fraud_req = verdict = None
     if settings.fraud_check_enabled:
-        client_ip = req.customer_ip or (request.client.host if request.client else "unknown")
-        fraud_req = fraud.build_request(
-            card_number, req.amount_cents, client_ip, req.customer_email, intent_id, api_key
+        fraud_req, verdict = fraud.check(  # verdict None = failed open
+            card_number, req.amount_cents, req.customer_ip, req.customer_email, intent_id,
+            api_key,
         )
-        verdict = fraud.score(fraud_req)  # None = failed open
 
     if verdict is not None and verdict.decision == FraudDecision.BLOCK:
-        # Never reaches the acquirer, so there's no issuer outcome to report back.
         result = AuthorizeResponse(approved=False, reason=DeclineReason.FRAUD_SUSPECTED)
+        # To the requester a block is a decline. Recording it as one keeps the per-IP
+        # decline features close to the training data, where attacks are mostly declined;
+        # otherwise an IP's decline rate would sink toward 0 the more it gets blocked.
+        background_tasks.add_task(fraud.report_outcome, fraud_req, declined=True)
     else:
         payload = AcquirerAuthorizeRequest(
             api_key=api_key,

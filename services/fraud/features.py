@@ -102,14 +102,20 @@ def observe(r: redis.Redis, tx: Tx, now: float, prefix: str = "fraud") -> dict:
     }
 
 
-def record_outcome(
-    r: redis.Redis, tx: Tx, now: float, declined: bool, prefix: str = "fraud"
-) -> None:
-    """Record the authorization result for an attempt already passed to observe()."""
+def record_outcome(r: redis.Redis, tx: Tx, declined: bool, prefix: str = "fraud") -> None:
+    """Record the authorization result for an attempt already passed to observe().
+
+    The decline is stamped with the *attempt's* time, not the time this call arrives, so
+    it leaves the windows together with its attempt - as in the offline features. If the
+    attempt has already expired from the windows (or was never observed), there's nothing
+    left for the outcome to count against, so it's dropped."""
     if not declined:
         return
-    key = _keys(tx, prefix)["ip_failed"]
+    k = _keys(tx, prefix)
+    attempted_at = r.zscore(k["ip_attempts"], tx.event_id)
+    if attempted_at is None:
+        return
     pipe = r.pipeline(transaction=True)
-    pipe.zadd(key, {tx.event_id: now})
-    pipe.expire(key, 2 * IP_LONG_WINDOW)
+    pipe.zadd(k["ip_failed"], {tx.event_id: attempted_at})
+    pipe.expire(k["ip_failed"], 2 * IP_LONG_WINDOW)
     pipe.execute()

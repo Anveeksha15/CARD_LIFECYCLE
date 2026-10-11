@@ -25,6 +25,7 @@ sequenceDiagram
     Fraud->>Redis: record attempt, read sliding windows (one MULTI round trip)
     Fraud-->>Gateway: risk, allow | review | block
     alt block
+        Gateway-)Fraud: POST /v1/outcome declined (background)
         Gateway-->>Merchant: failed, fraud_suspected (acquirer never called)
     else allow / review / fraud service unavailable (fail open)
         Gateway->>Acquirer: authorize (the existing path)
@@ -234,6 +235,10 @@ that instead of the service.
 - **No feedback loop.** No retraining from outcomes, no drift monitoring, and no human
   review queue behind `review`. The Docker image retrains from the same fixed seed at
   build time, so the model never learns anything new.
+- **Leaving fields out hides you.** A payment with no shopper email or IP gets a key of its
+  own, so it never builds up email or IP velocity. A card tester whose merchant doesn't
+  send those fields escapes those features entirely. A "field missing" feature (and
+  training data with missing fields) would close that gap.
 - **Simple features.** No device fingerprinting, account history, merchant baselines, or
   velocity across longer horizons.
 - **No sequence model.** The planned GRU was skipped, and the flash-sale failure is the

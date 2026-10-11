@@ -150,8 +150,19 @@ fraud decision** (fail open).
   doubles the load on a service that is probably already struggling.
 - **`review` still goes through.** Review means "a human or a slower check should look at
   this later", not "stop" - only `block` skips the acquirer.
-- **Blocked attempts don't report an outcome.** They never reached the issuer, so there's
-  no approve/decline to record; the attempt itself was already counted when it was scored.
+- **Blocked attempts are reported as declines.** The first version reported nothing for
+  them, since they never reached the issuer. The final code review caught what that does
+  to the features: blocked attempts still count as attempts, but not as declines, so an
+  IP's decline rate *sinks toward 0* the longer it is blocked. In training, attack traffic
+  is mostly declined, so a model scored mid-attack on a falling decline rate drifts toward
+  "allow". To the requester a block is a decline, so it's recorded as one. Declines are
+  also stamped with the attempt's own time rather than the time the outcome arrives, so
+  they leave the window together with their attempt, as in the offline features.
+- **Missing shopper details get a key of their own.** If the merchant doesn't send the
+  shopper's IP (or email), the payment gets a unique placeholder. Falling back to the
+  request's source address would have used the *merchant's server* IP, lumping all its
+  shoppers into one apparent burst. The cost: a merchant that never sends these fields
+  gets no IP/email velocity checks at all. A "field missing" feature would be the real fix.
 - **Fingerprint, not token.** The vault mints a fresh random token per tokenize call, so
   the gateway sends an HMAC of the card number instead - otherwise retrying the same card
   would look like many different cards. The merchant's API key is hashed for the same

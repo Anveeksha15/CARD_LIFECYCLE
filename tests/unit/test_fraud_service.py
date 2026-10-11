@@ -87,6 +87,9 @@ class _DownRedis(fakeredis.FakeRedis):
     def pipeline(self, *args, **kwargs):
         raise redis.ConnectionError("connection refused")
 
+    def zscore(self, *args, **kwargs):
+        raise redis.ConnectionError("connection refused")
+
 
 def test_redis_down_returns_503(client, monkeypatch):
     monkeypatch.setattr(fraud_main, "_redis", _DownRedis(decode_responses=True))

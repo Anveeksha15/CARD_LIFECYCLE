@@ -25,8 +25,9 @@ diagram. Two details worth calling out:
   acquirer: the gateway sends a card fingerprint, BIN, the shopper's IP/email and the
   amount to `services/fraud`'s `POST /v1/score` with a 150 ms budget. A `block` declines
   the payment as `fraud_suspected` without calling the acquirer; anything else - including
-  the fraud service being slow or down - continues down the chain. After the issuer
-  answers, the gateway reports the outcome to `POST /v1/outcome` in a background task.
+  the fraud service being slow or down - continues down the chain. Once the outcome is
+  known (the issuer's answer, or the block itself, recorded as a decline), the gateway
+  reports it to `POST /v1/outcome` in a background task.
   Details in [fraud.md](fraud.md).
 
 ### 2. Settlement ("days later", compressed to seconds)

@@ -163,11 +163,12 @@ def test_outcome_reported_for_issuer_answers(gateway_client, fraud_on, outcomes)
     assert outcomes == [False, True]
 
 
-def test_no_outcome_for_blocked_payment(gateway_client, fraud_on, outcomes):
+def test_blocked_payment_is_reported_as_declined(gateway_client, fraud_on, outcomes):
     _stub_fraud_risk(0.99)
     body = _pay(gateway_client, "4242424242424242", 1500)
     assert body["decline_reason"] == "fraud_suspected"
-    assert outcomes == []
+    # Otherwise an IP's decline rate would sink toward 0 the more it gets blocked.
+    assert outcomes == [True]
 
 
 def test_no_outcome_when_issuer_answer_is_lost(gateway_client, fraud_on, outcomes, monkeypatch):
@@ -187,9 +188,26 @@ def test_review_still_reaches_the_acquirer(gateway_client, fraud_on, acquirer_ca
     assert len(acquirer_calls) == 1
 
 
-def test_client_host_used_when_merchant_sends_no_ip(gateway_client, fraud_on, score_calls):
-    _pay(gateway_client, "4242424242424242", 1500)
-    assert score_calls[0].ip == "testclient"  # TestClient's request.client.host
+def test_missing_shopper_ip_gets_its_own_key(gateway_client, fraud_on, score_calls):
+    # Never the merchant server's address: that would lump all its shoppers together.
+    first = _pay(gateway_client, "4242424242424242", 1500)
+    second = _pay(gateway_client, "4242424242424242", 1500)
+    assert score_calls[0].ip == f"none:{first['id']}"
+    assert score_calls[0].ip != score_calls[1].ip
+    assert second["fraud_decision"] == "allow"
+
+
+def test_card_too_short_for_a_bin_fails_open(gateway_client, fraud_on):
+    # "18" passes the Luhn check but can't produce a 6-digit BIN for the fraud request.
+    body = _pay(gateway_client, "18", 1500)
+    assert body["fraud_decision"] is None
+    assert body["decline_reason"] != "fraud_suspected"
+
+
+def test_fraud_decision_is_returned_when_listing(gateway_client, fraud_on):
+    body = _pay(gateway_client, "4242424242424242", 1500, customer_ip="198.51.100.30")
+    listed = {i["id"]: i for i in gateway_client.get("/v1/payment_intents").json()}
+    assert listed[body["id"]]["fraud_decision"] == "allow"
 
 
 def test_malformed_fraud_response_fails_open(gateway_client, fraud_on, monkeypatch):

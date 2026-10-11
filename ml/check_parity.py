@@ -26,7 +26,7 @@ def replay(r: redis.Redis, df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     for e in df.itertuples(index=False):
         tx = Tx(e.event_id, e.card_token, e.bin, e.ip, e.email)
         rows.append(observe(r, tx, e.ts, prefix=prefix))
-        record_outcome(r, tx, e.ts, declined=e.outcome == "declined", prefix=prefix)
+        record_outcome(r, tx, declined=e.outcome == "declined", prefix=prefix)
     return pd.DataFrame(rows, columns=FEATURE_NAMES, index=df.index)
 
 

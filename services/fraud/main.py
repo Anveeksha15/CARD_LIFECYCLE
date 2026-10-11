@@ -1,3 +1,4 @@
+import logging
 import time
 from contextlib import asynccontextmanager
 
@@ -15,11 +16,20 @@ from services.fraud.features import Tx, observe, record_outcome
 from services.fraud.model import FraudModel
 
 _redis = redis.from_url(settings.redis_url, decode_responses=True)
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = FraudModel.load(settings.fraud_model_path)
+    if settings.fraud_review_threshold >= app.state.model.threshold:
+        # The block threshold comes from training, the review one from config - if they
+        # cross, "review" can never be returned.
+        log.warning(
+            "fraud_review_threshold %.3f >= model block threshold %.3f: no review band",
+            settings.fraud_review_threshold,
+            app.state.model.threshold,
+        )
     yield
 
 
@@ -64,7 +74,7 @@ def score(req: FraudScoreRequest, request: Request) -> FraudScoreResponse:
 def outcome(req: FraudOutcomeRequest) -> dict:
     tx = Tx(req.event_id, req.card_fingerprint, req.bin, req.ip, req.email)
     try:
-        record_outcome(_redis, tx, now=time.time(), declined=req.declined)
+        record_outcome(_redis, tx, declined=req.declined)
     except redis.RedisError as exc:
         raise _redis_unavailable(exc) from exc
     return {"recorded": True}
