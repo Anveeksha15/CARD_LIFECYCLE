@@ -37,5 +37,9 @@ class Settings(BaseSettings):
     fraud_model_path: str = "ml/artifacts/gbm"
     fraud_review_threshold: float = 0.5  # block threshold comes from the model's metadata
 
+    fraud_check_enabled: bool = False
+    fraud_timeout_seconds: float = 0.15
+    card_fingerprint_secret: str = "change-me-dev-fingerprint"
+
 
 settings = Settings()

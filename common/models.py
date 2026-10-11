@@ -17,6 +17,13 @@ class DeclineReason(StrEnum):
     UNSUPPORTED_NETWORK = "unsupported_network"
     INVALID_MERCHANT = "invalid_merchant"
     UPSTREAM_TIMEOUT = "upstream_timeout"
+    FRAUD_SUSPECTED = "fraud_suspected"
+
+
+class FraudDecision(StrEnum):
+    ALLOW = "allow"
+    REVIEW = "review"
+    BLOCK = "block"
 
 
 class AuthorizeRequest(BaseModel):
@@ -54,6 +61,9 @@ class TokenizeResponse(BaseModel):
 class PaymentIntentCreateRequest(BaseModel):
     amount_cents: int = Field(gt=0)
     token: str
+    # The shopper's details, passed by the merchant for fraud scoring (like Stripe Radar).
+    customer_ip: str | None = None
+    customer_email: str | None = None
 
 
 class PaymentIntentResponse(BaseModel):
@@ -63,6 +73,8 @@ class PaymentIntentResponse(BaseModel):
     decline_reason: DeclineReason | None = None
     settled: bool = False
     created_at: datetime
+    # None when the fraud check is disabled or failed open.
+    fraud_decision: FraudDecision | None = None
 
 
 class ReversalRequest(BaseModel):
@@ -71,12 +83,6 @@ class ReversalRequest(BaseModel):
 
 class ReversalResponse(BaseModel):
     reversed: bool
-
-
-class FraudDecision(StrEnum):
-    ALLOW = "allow"
-    REVIEW = "review"
-    BLOCK = "block"
 
 
 class FraudScoreRequest(BaseModel):

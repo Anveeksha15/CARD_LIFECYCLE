@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from sqlmodel import select
 
 from common.config import settings
@@ -10,13 +10,15 @@ from common.models import (
     AcquirerAuthorizeRequest,
     AuthorizeResponse,
     DeclineReason,
+    FraudDecision,
     PaymentIntentCreateRequest,
     PaymentIntentResponse,
     ReversalRequest,
     TokenizeRequest,
     TokenizeResponse,
 )
-from services.gateway.db import PaymentIntent, get_session
+from services.gateway import fraud
+from services.gateway.db import FraudCheck, PaymentIntent, get_session
 from services.gateway.idempotency import IdempotencyInProgress, claim, store_result
 from services.gateway.vault import InvalidCardError, detokenize, tokenize
 from services.gateway.webhooks import send_webhook
@@ -71,6 +73,7 @@ def settle_payment_intent(intent_id: str) -> PaymentIntentResponse:
 @router.post("/v1/payment_intents", response_model=PaymentIntentResponse)
 def create_payment_intent(
     req: PaymentIntentCreateRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     authorization: str = Header(..., alias="Authorization"),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
@@ -98,30 +101,31 @@ def create_payment_intent(
     request_id = uuid.uuid4().hex
     created_at = datetime.now(UTC)
 
-    payload = AcquirerAuthorizeRequest(
-        api_key=api_key,
-        card_number=card_number,
-        amount_cents=req.amount_cents,
-        request_id=request_id,
-        simulate_lost_response=simulate_lost_response,
-    )
+    fraud_req = verdict = None
+    if settings.fraud_check_enabled:
+        client_ip = req.customer_ip or (request.client.host if request.client else "unknown")
+        fraud_req = fraud.build_request(
+            card_number, req.amount_cents, client_ip, req.customer_email, intent_id, api_key
+        )
+        verdict = fraud.score(fraud_req)  # None = failed open
 
-    try:
-        resp = post_with_retry(f"{settings.acquirer_url}/v1/authorize", payload.model_dump())
-        result = AuthorizeResponse.model_validate(resp.json())
-    except UpstreamError:
-        # We don't know whether the issuer approved before the response was
-        # lost - best-effort reverse whatever it may have recorded for this
-        # request_id, then surface it to the merchant as a plain failure.
-        try:
-            post_with_retry(
-                f"{settings.acquirer_url}/v1/reversals",
-                ReversalRequest(request_id=request_id).model_dump(),
-                max_attempts=1,
+    if verdict is not None and verdict.decision == FraudDecision.BLOCK:
+        # Never reaches the acquirer, so there's no issuer outcome to report back.
+        result = AuthorizeResponse(approved=False, reason=DeclineReason.FRAUD_SUSPECTED)
+    else:
+        payload = AcquirerAuthorizeRequest(
+            api_key=api_key,
+            card_number=card_number,
+            amount_cents=req.amount_cents,
+            request_id=request_id,
+            simulate_lost_response=simulate_lost_response,
+        )
+        result = _authorize(payload)
+        # An upstream timeout means the issuer's answer is unknown - don't record a guess.
+        if verdict is not None and result.reason != DeclineReason.UPSTREAM_TIMEOUT:
+            background_tasks.add_task(
+                fraud.report_outcome, fraud_req, declined=not result.approved
             )
-        except UpstreamError:
-            pass
-        result = AuthorizeResponse(approved=False, reason=DeclineReason.UPSTREAM_TIMEOUT)
 
     status = "succeeded" if result.approved else "failed"
 
@@ -137,6 +141,15 @@ def create_payment_intent(
                 created_at=created_at,
             )
         )
+        if verdict is not None:
+            session.add(
+                FraudCheck(
+                    intent_id=intent_id,
+                    risk=verdict.risk,
+                    decision=verdict.decision,
+                    model=verdict.model,
+                )
+            )
         session.commit()
 
     response = PaymentIntentResponse(
@@ -145,6 +158,7 @@ def create_payment_intent(
         status=status,
         decline_reason=result.reason,
         created_at=created_at,
+        fraud_decision=verdict.decision if verdict is not None else None,
     )
 
     if idem_redis_key:
@@ -163,3 +177,22 @@ def create_payment_intent(
     )
 
     return response
+
+
+def _authorize(payload: AcquirerAuthorizeRequest) -> AuthorizeResponse:
+    try:
+        resp = post_with_retry(f"{settings.acquirer_url}/v1/authorize", payload.model_dump())
+        return AuthorizeResponse.model_validate(resp.json())
+    except UpstreamError:
+        # We don't know whether the issuer approved before the response was
+        # lost - best-effort reverse whatever it may have recorded for this
+        # request_id, then surface it to the merchant as a plain failure.
+        try:
+            post_with_retry(
+                f"{settings.acquirer_url}/v1/reversals",
+                ReversalRequest(request_id=payload.request_id).model_dump(),
+                max_attempts=1,
+            )
+        except UpstreamError:
+            pass
+        return AuthorizeResponse(approved=False, reason=DeclineReason.UPSTREAM_TIMEOUT)

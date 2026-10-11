@@ -4,23 +4,14 @@ from fastapi.testclient import TestClient
 
 import services.fraud.main as fraud_main
 from common.config import settings
-from ml.generate_data import generate
-from ml.train import train
 from services.fraud.features import FEATURE_NAMES
 from services.fraud.model import FraudModel
 
 
-@pytest.fixture(scope="module")
-def model_prefix(tmp_path_factory):
-    out = tmp_path_factory.mktemp("artifacts")
-    train(generate(n=20_000, seed=7), out_dir=out)
-    return out / "gbm"
-
-
 @pytest.fixture
-def client(monkeypatch, model_prefix):
+def client(monkeypatch, fraud_model_prefix):
     monkeypatch.setattr(fraud_main, "_redis", fakeredis.FakeRedis(decode_responses=True))
-    monkeypatch.setattr(settings, "fraud_model_path", str(model_prefix))
+    monkeypatch.setattr(settings, "fraud_model_path", str(fraud_model_prefix))
     with TestClient(fraud_main.app) as c:
         yield c
 

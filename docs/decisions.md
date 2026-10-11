@@ -133,6 +133,43 @@ The service reads the model's feature order and block threshold from the artifac
 metadata rather than redefining them, so a retrained model can't silently be fed columns
 in the wrong order.
 
+### The fraud check fails open, with a 150 ms budget
+The gateway asks the fraud service about every payment (when `FRAUD_CHECK_ENABLED`)
+before it reaches the acquirer, and gives it 150 ms, one attempt, no retry. If the call
+times out, errors or returns something unparseable, the payment **continues without a
+fraud decision** (fail open).
+
+- **Why open, not closed.** Failing closed turns a fraud-service outage into a total
+  payment outage - every legitimate customer declined because a scoring dependency is
+  down. Failing open lets fraud through only for as long as the outage lasts, and it's
+  visible: every scored payment gets a `FraudCheck` row, so unscored ones are exactly the
+  intents without one. A real system would alert on that gap.
+- **Why no retry.** The budget is the point. A retry inside 150 ms either doesn't fit or
+  doubles the load on a service that is probably already struggling.
+- **`review` still goes through.** Review means "a human or a slower check should look at
+  this later", not "stop" - only `block` skips the acquirer.
+- **Blocked attempts don't report an outcome.** They never reached the issuer, so there's
+  no approve/decline to record; the attempt itself was already counted when it was scored.
+- **Fingerprint, not token.** The vault mints a fresh random token per tokenize call, so
+  the gateway sends an HMAC of the card number instead - otherwise retrying the same card
+  would look like many different cards. The merchant's API key is hashed for the same
+  reason: the fraud service never sees secrets or card numbers.
+
+Measured on the Docker stack (`python -m scripts.fraud_latency`, `ml/results/latency.md`):
+`/v1/score` is ~6 ms p50 / ~8 ms p95 on its own, and turning the check on adds ~17 ms p50
+to a gateway payment intent. That's more than the score call alone because
+`post_with_retry` opens a new connection per call; a pooled client would be the first
+optimization.
+
+**Two things the demo surfaced:**
+- **BIN spillover.** After a burst on BIN 424242, a clean customer on that BIN scored 0.82
+  (`review`) for the next minute, vs 0.07 on a different BIN - the per-BIN window can't
+  tell the attacker's traffic from everyone else's. Not blocked, but it's real collateral
+  cost and worth watching if the block threshold is ever lowered.
+- **`localhost` on Windows.** POSTs to `localhost` from the Windows host carried ~45 ms of
+  extra latency that `127.0.0.1` and in-container calls didn't; the first latency run
+  measured that instead of the service. The latency script uses `127.0.0.1`.
+
 ### Other excluded scope
 Encryption at rest, authorization/capture as separate steps, chargebacks, and
 multi-currency are all left out - see the README's "What's excluded" section. None of
