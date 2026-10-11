@@ -60,6 +60,12 @@ def best_f1_threshold(y_true: pd.Series, scores: np.ndarray) -> tuple[float, flo
 def train(df: pd.DataFrame, out_dir: Path = DEFAULT_OUT) -> dict[str, dict]:
     X, y = build_matrix(df)
     split = time_split(df)
+    for name in ("train", "val"):
+        if not y[split[name]].any():
+            raise ValueError(
+                f"no attack events in the {name} slice - generate more data (--n) so the "
+                "model can be fit and its threshold tuned"
+            )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     trained = {}

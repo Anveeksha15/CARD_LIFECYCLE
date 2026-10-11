@@ -111,6 +111,28 @@ count with `ZCOUNT` using an exclusive `(` lower bound. Distinct cards per IP is
 set keyed by card with its last-seen time as the score. All trims, adds, counts and
 TTLs go in one `MULTI` pipeline - one network round trip per score, no Lua needed.
 
+### Why the fraud service serves gradient boosting, and no sequence model (yet)
+The original plan had an optional GRU over each IP's recent events. It was skipped on
+purpose: gradient boosting on the six window features plus amount already reached
+F1 0.95 on the synthetic test slice (vs 0.54 for the rules), so a sequence model had little
+room to show a real gain, and PyTorch would have added ~200 MB to the ML dependencies and
+slowed every CI run. Sequence models are the natural next step once the data has
+attackers that the window features can't separate - e.g. slow campaigns, which are
+already the model's weakest category.
+
+### Why the fraud model is trained at image build time
+`ml/artifacts/` is gitignored, so the fraud image can't just copy a model in. Instead its
+Docker build runs `ml.generate_data` + `ml.train` (fixed seed, ~30 s), gated by a
+`TRAIN_FRAUD_MODEL` build arg so the other services' images are unchanged. The
+alternative - committing `gbm.joblib` - would tie the repo to one scikit-learn version's
+pickle format and put an opaque binary in review diffs. Building it from code keeps the
+model reproducible from what's in git. Adding `.dockerignore` came with this: without it,
+`COPY . .` also copied the host's `.venv` and any locally trained artifacts into the image.
+
+The service reads the model's feature order and block threshold from the artifact's JSON
+metadata rather than redefining them, so a retrained model can't silently be fed columns
+in the wrong order.
+
 ### Other excluded scope
 Encryption at rest, authorization/capture as separate steps, chargebacks, and
 multi-currency are all left out - see the README's "What's excluded" section. None of

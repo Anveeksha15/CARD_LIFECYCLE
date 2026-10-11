@@ -72,6 +72,22 @@ services:
     depends_on:
       - network
 
+  fraud:
+    build:
+      context: .
+      args:
+        UV_SYNC_ARGS: "--group ml"
+        TRAIN_FRAUD_MODEL: "true"
+    command: ["python", "-m", "uvicorn", "services.fraud.main:app", "--host", "0.0.0.0", "--port", "8005"]
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
   settlement:
     build: .
     command: ["python", "-m", "services.settlement.worker"]

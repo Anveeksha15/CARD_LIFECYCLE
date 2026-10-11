@@ -71,3 +71,37 @@ class ReversalRequest(BaseModel):
 
 class ReversalResponse(BaseModel):
     reversed: bool
+
+
+class FraudDecision(StrEnum):
+    ALLOW = "allow"
+    REVIEW = "review"
+    BLOCK = "block"
+
+
+class FraudScoreRequest(BaseModel):
+    event_id: str
+    # Must be stable per card (e.g. an HMAC of the card number) - a fresh vault token per
+    # attempt would make every retry of the same card look like a new card.
+    card_fingerprint: str
+    bin: str = Field(min_length=6, max_length=6)
+    ip: str
+    email: str
+    amount_cents: int = Field(gt=0)
+    merchant_id: str
+
+
+class FraudScoreResponse(BaseModel):
+    risk: float
+    decision: FraudDecision
+    model: str
+    features: dict[str, float]
+
+
+class FraudOutcomeRequest(BaseModel):
+    event_id: str
+    card_fingerprint: str
+    bin: str
+    ip: str
+    email: str
+    declined: bool
