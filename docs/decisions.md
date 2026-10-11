@@ -114,11 +114,13 @@ TTLs go in one `MULTI` pipeline - one network round trip per score, no Lua neede
 ### Why the fraud service serves gradient boosting, and no sequence model (yet)
 The original plan had an optional GRU over each IP's recent events. It was skipped on
 purpose: gradient boosting on the six window features plus amount already reached
-F1 0.95 on the synthetic test slice (vs 0.54 for the rules), so a sequence model had little
-room to show a real gain, and PyTorch would have added ~200 MB to the ML dependencies and
-slowed every CI run. Sequence models are the natural next step once the data has
-attackers that the window features can't separate - e.g. slow campaigns, which are
-already the model's weakest category.
+F1 0.95 on the seed-42 test slice (vs 0.54 for the rules), and PyTorch would have added
+~200 MB to the ML dependencies and slowed every CI run. In hindsight the "little room
+left" argument was weaker than it looked: across five dataset seeds gradient boosting
+averages F1 0.87 (0.74-0.96), and most of the gap is false positives on the flash sale
+(`ml/results/seeds.md`, `docs/fraud.md`). That's a better case for a sequence model than
+the one I skipped it on - a burst of *different customers* buying at one merchant looks
+different over time from one actor cycling cards, even when the window counts match.
 
 ### Why the fraud model is trained at image build time
 `ml/artifacts/` is gitignored, so the fraud image can't just copy a model in. Instead its
