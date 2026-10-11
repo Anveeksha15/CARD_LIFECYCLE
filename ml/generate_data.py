@@ -46,6 +46,10 @@ ATTACK_SHARE = 0.035
 FLASH_SALE_SHARE = 0.012
 NORMAL_DECLINE_RATE = 0.05
 RETRY_AFTER_DECLINE_PROB = 0.4
+# Amounts overlap on purpose so amount alone can't separate the classes: some customers
+# make tiny purchases, and some attackers test cards with normal-looking amounts.
+SMALL_PURCHASE_PROB = 0.03
+ATTACK_MIMIC_PROB = 0.2
 
 # Rough hour-of-day traffic shape for normal customers (index = hour).
 HOURLY_WEIGHTS = np.array(
@@ -95,6 +99,8 @@ def _merchant(rng: np.random.Generator) -> str:
 
 
 def _normal_amount(rng: np.random.Generator) -> int:
+    if rng.random() < SMALL_PURCHASE_PROB:
+        return int(rng.integers(50, 501))  # tips, digital goods: $0.50 - $5.00
     # Lognormal around $40, clipped to $5-$300.
     return int(np.clip(rng.lognormal(mean=np.log(4000), sigma=0.8), 500, 30_000))
 
@@ -164,6 +170,8 @@ def _flash_sale(rng, ids: _Ids, customers: list[dict], n_events: int) -> list[di
 
 
 def _attack_amount(rng: np.random.Generator) -> int:
+    if rng.random() < ATTACK_MIMIC_PROB:
+        return _normal_amount(rng)
     return int(rng.integers(50, 201))  # $0.50 - $2.00
 
 
@@ -211,10 +219,28 @@ def _attack_rotating_ip(rng, ids: _Ids, campaign: str) -> list[dict]:
     ]
 
 
+def _attack_rotating_identity(rng, ids: _Ids, campaign: str) -> list[dict]:
+    """A fresh email per attempt and IPs from a proxy pool - only the BIN and the target
+    merchant tie the attempts together, so per-IP and per-email windows see nothing."""
+    n = int(rng.integers(30, 101))
+    start = rng.uniform(0, HORIZON_SECONDS - 900)
+    times = np.sort(start + rng.uniform(0, rng.uniform(120, 600), size=n))
+    pool = [ids.ip() for _ in range(int(rng.integers(20, 60)))]
+    merchant = _merchant(rng)
+    bin_ = BINS[rng.integers(0, len(BINS))]
+    return [
+        _row(t, ids.card(), bin_, _attack_amount(rng), pool[rng.integers(0, len(pool))],
+             ids.email(), merchant, rng.random() < 0.85, 1, "attack_rotating_identity",
+             campaign)
+        for t in times
+    ]
+
+
 ATTACK_KINDS = [
-    (_attack_burst, 0.6),
+    (_attack_burst, 0.45),
     (_attack_slow, 0.2),
-    (_attack_rotating_ip, 0.2),
+    (_attack_rotating_ip, 0.15),
+    (_attack_rotating_identity, 0.2),
 ]
 
 

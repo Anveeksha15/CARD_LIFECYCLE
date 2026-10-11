@@ -9,24 +9,24 @@ from pathlib import Path
 
 import pandas as pd
 
-from ml.generate_data import HORIZON_SECONDS
+from ml.dataset import DEFAULT_DATA, load, time_split
 from ml.metrics import report
 from ml.offline_features import FEATURE_NAMES, compute_features
 from services.fraud.rules import rules_flag
 
-# Day 3 trains on the first 70% of the timeline and tests on the rest; the baseline is
-# reported on the same test slice so the comparison is like-for-like.
-TEST_START = 0.7 * HORIZON_SECONDS
 RESULTS_DIR = Path("ml/results")
 
 
-def evaluate(df: pd.DataFrame) -> dict:
-    features = compute_features(df)
-    flagged = [int(rules_flag(f)) for f in features[FEATURE_NAMES].to_dict("records")]
-    df = df.assign(flagged=flagged)
-    campaigns = df["campaign_id"].fillna("")
+def rules_predictions(features: pd.DataFrame) -> list[int]:
+    return [int(rules_flag(f)) for f in features[FEATURE_NAMES].to_dict("records")]
 
-    test = df["ts"] >= TEST_START
+
+def evaluate(df: pd.DataFrame) -> dict:
+    df = df.assign(flagged=rules_predictions(compute_features(df)))
+    campaigns = df["campaign_id"]
+
+    # Reported on the same test slice the models use, so the comparison is like-for-like.
+    test = time_split(df)["test"]
     results = {
         "all": report(df["is_attack"], df["flagged"], campaigns),
         "test": report(df.loc[test, "is_attack"], df.loc[test, "flagged"], campaigns[test]),
@@ -60,10 +60,10 @@ def to_markdown(results: dict, n_rows: int) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--data", type=Path, default=Path("ml/data/transactions.csv"))
+    parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     args = parser.parse_args()
 
-    df = pd.read_csv(args.data, dtype={"bin": str})
+    df = load(args.data)
     results = evaluate(df)
     markdown = to_markdown(results, len(df))
 

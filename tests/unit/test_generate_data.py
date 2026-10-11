@@ -37,3 +37,10 @@ def test_attack_rows_belong_to_campaigns(small):
 def test_no_card_numbers_anywhere(small):
     pan_like = small.astype(str).apply(lambda col: col.str.fullmatch(r"\d{13,19}"))
     assert not pan_like.to_numpy().any()
+
+
+def test_amounts_overlap_between_classes(small):
+    normal = small.loc[small["is_attack"] == 0, "amount_cents"]
+    attack = small.loc[small["is_attack"] == 1, "amount_cents"]
+    assert (normal < 500).any()
+    assert (attack > 500).any()

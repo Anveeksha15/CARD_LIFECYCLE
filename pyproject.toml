@@ -25,6 +25,7 @@ dev = [
 ml = [
     "numpy>=1.26",
     "pandas>=2.2",
+    "scikit-learn>=1.5",
 ]
 
 [tool.uv]
