@@ -1,5 +1,10 @@
 # card-lifecycle-sim
 
+[![CI](https://github.com/Anveeksha15/CARD_LIFECYCLE/actions/workflows/ci.yml/badge.svg)](https://github.com/Anveeksha15/CARD_LIFECYCLE/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-microservices-009688)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A small backend system that reproduces the Stripe-like card payment lifecycle in code.
 Each party — a gateway, an acquiring bank, a processor, a card network, and an issuing
 bank — is its own FastAPI service. A payment travels through all of them over HTTP in
@@ -15,9 +20,29 @@ See [Fraud detection](#fraud-detection).
 project, or Stripe's own [published test cards](https://stripe.com/docs/testing).
 Never real card data.
 
+## Highlights
+
+- **Seven cooperating services** — gateway, acquirer, processor, network, issuer,
+  settlement worker and fraud scorer — wired together with Docker Compose.
+- **Tokenization** — raw card numbers are swapped for opaque `tok_...` tokens at the edge.
+- **Idempotency** — a retried request with the same `Idempotency-Key` never double-charges.
+- **Retries, timeouts and reversals** — if the issuer approves but the response is lost,
+  the gateway reverses the authorization instead of leaving money in limbo.
+- **Signed webhooks** — HMAC-signed payment events delivered to the merchant.
+- **Double-entry settlement ledger** — every movement is a balanced debit/credit pair.
+- **ML fraud detection** — Redis sliding-window features, a gradient-boosting model
+  trained on synthetic card-testing traffic, a 150 ms fail-open budget.
+- **Tested** — unit and in-process integration tests, linted with Ruff, run in GitHub Actions.
+
+## Tech stack
+
+Python 3.11+, FastAPI, httpx, Pydantic, SQLModel/SQLite, Redis, scikit-learn,
+pandas/numpy, pytest, Ruff, uv, Docker Compose.
+
 ## Quickstart
 
 ```bash
+cp .env.example .env
 uv sync --all-groups
 docker compose up --build -d
 docker exec card_lifecycle-issuer-1 python -m scripts.seed_issuer
@@ -36,6 +61,61 @@ two idempotency tests need Redis, e.g. `docker compose up -d redis`):
 uv run ruff check .
 uv run pytest -q
 ```
+
+## Services
+
+| service | port | responsibility |
+|---|---|---|
+| gateway | 8000 | tokens, payment_intents, idempotency, webhooks, checkout UI at `/` |
+| acquirer | 8001 | validates the merchant's API key, forwards authorizations |
+| processor | 8002 | routes by BIN prefix to the right card network |
+| network | 8003 | forwards to the issuing bank |
+| issuer | 8004 | checks card status and balance, approves or declines |
+| fraud | 8005 | `/v1/score` and `/v1/outcome` for real-time card-testing detection |
+| merchant-demo | 9000 | receives and verifies signed webhooks (`GET /events` to inspect) |
+| settlement | — | background worker that settles payments into the ledger |
+| redis | 6379 | idempotency keys and fraud sliding windows |
+
+Every service exposes `GET /health`, and FastAPI's interactive docs at `/docs`.
+
+## Try the API
+
+After seeding, these Stripe test cards are available:
+
+| card | behaviour |
+|---|---|
+| `4242424242424242` (Visa) | approved |
+| `5555555555554444` (Mastercard) | approved |
+| `378282246310005` (Amex) | approved |
+| `4000000000009995` | declined — insufficient funds |
+| `4000000000000002` | declined — card blocked |
+
+```bash
+# 1. Tokenize a card
+curl -s -X POST localhost:8000/v1/tokens   -H 'Content-Type: application/json'   -d '{"card_number": "4242424242424242"}'
+# -> {"token": "tok_..."}
+
+# 2. Create a payment
+curl -s -X POST localhost:8000/v1/payment_intents   -H 'Authorization: Bearer sk_test_demo_merchant'   -H 'Idempotency-Key: order-1001'   -H 'Content-Type: application/json'   -d '{"amount_cents": 1500, "token": "tok_...", "customer_ip": "203.0.113.7", "customer_email": "shopper@example.com"}'
+```
+
+Or use the merchant script: `uv run python -m merchant_demo.checkout 4242424242424242 1500`.
+
+## Configuration
+
+Settings are read from environment variables or `.env` (copy `.env.example` to `.env`).
+The most useful ones:
+
+| variable | default | meaning |
+|---|---|---|
+| `FRAUD_CHECK_ENABLED` | `false` (`true` in Compose) | turn the fraud check on or off |
+| `FRAUD_TIMEOUT_SECONDS` | `0.15` | fraud-check budget before failing open |
+| `SETTLEMENT_DELAY_SECONDS` | `5` | how long "days later" lasts |
+| `WEBHOOK_SECRET` | `change-me-dev-secret` | HMAC key for webhook signatures |
+| `CARD_FINGERPRINT_SECRET` | `change-me-dev-fingerprint` | key for hashing card numbers sent to fraud |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
+
+See [common/config.py](common/config.py) for the full list.
 
 ## Architecture
 
@@ -147,3 +227,7 @@ Per the original scope, these are deliberately left out:
 - Multi-currency (everything is an opaque integer `amount_cents`)
 - A webhook retry queue (delivery is best-effort, single attempt)
 - A flat per-transaction fee component (the settlement fee is percentage-only)
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Anveeksha15.
